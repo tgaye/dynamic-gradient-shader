@@ -1,0 +1,246 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Dynamic Gradient Shader</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #canvas-container {
+            width: 100%;
+            max-width: 1200px;
+            height: 675px;
+            position: relative;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            color: white;
+            font-family: Arial, sans-serif;
+            backdrop-filter: blur(5px);
+        }
+
+        .control-group {
+            margin: 10px 0;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        input[type="range"] {
+            width: 200px;
+        }
+
+        button {
+            background: #2196F3;
+            border: none;
+            padding: 8px 15px;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+    </style>
+
+<base target="_self">
+
+
+    </head><body><div id="canvas-container"></div>
+    <div id="ui">
+        <div class="control-group">
+            <label for="hueRange">Hue Variation:</label>
+            <input type="range" id="hueRange" min="0" max="1" value="0.5" step="0.01">
+        </div>
+        <div class="control-group">
+            <label for="speedRange">Animation Speed:</label>
+            <input type="range" id="speedRange" min="0" max="2" value="1" step="0.1">
+        </div>
+        <button id="resetZoom">Reset Zoom</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <script>
+        if (!WebGLRenderingContext) {
+            document.getElementById('canvas-container').innerHTML = 
+                '<div style="color: white; text-align: center; padding: 20px;">WebGL not supported</div>';
+            throw new Error('WebGL not supported');
+        }
+
+        let mouse = new THREE.Vector2(0.5, 0.5);
+        let targetZoom = 1;
+        let currentZoom = 1;
+        let zoomCenter = new THREE.Vector2(0.5, 0.5);
+        const ZOOM_SPEED = 0.1;
+        const MIN_ZOOM = 0.5;
+        const MAX_ZOOM = 8;
+
+        const vertexShader = `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        const fragmentShader = `
+            precision highp float;
+            uniform vec2 resolution;
+            uniform vec2 mouse;
+            uniform float time;
+            uniform float hueVariation;
+            uniform float animationSpeed;
+            uniform float zoom;
+            uniform vec2 zoomCenter;
+
+            varying vec2 vUv;
+
+            vec3 hsl2rgb(float h, float s, float l) {
+                vec3 rgb = clamp(abs(mod(h*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0, 0.0, 1.0);
+                return l + s * (rgb-0.5)*(1.0-abs(2.0*l-1.0));
+            }
+
+            void main() {
+                // Apply zoom transformation
+                vec2 uv = (vUv - zoomCenter) * zoom + zoomCenter;
+                
+                // Base color calculation
+                float hue = mix(uv.x, mouse.x, hueVariation) + sin(time * 0.5 * animationSpeed) * 0.1;
+                float saturation = mix(0.8, 1.2, uv.y * mouse.y);
+                float lightness = 0.5 + 0.3 * sin(uv.x * 10.0 + time * animationSpeed);
+                
+                // Color mixing
+                vec3 color1 = hsl2rgb(fract(hue), saturation, lightness);
+                vec3 color2 = hsl2rgb(fract(hue + 0.3), 0.8, 0.6);
+                
+                // Gradient blend
+                float gradient = smoothstep(0.3, 0.7, uv.y + 0.2 * sin(uv.x * 5.0 + time));
+                vec3 finalColor = mix(color1, color2, gradient);
+                
+                // Add subtle pulse
+                finalColor *= 0.9 + 0.1 * sin(time * 2.0 * animationSpeed);
+                
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: "high-performance"
+        });
+        
+        // Canvas sizing
+        const container = document.getElementById('canvas-container');
+        const setSize = () => {
+            const width = Math.min(container.clientWidth, 1200);
+            const height = width * (9/16);
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        };
+        setSize();
+        container.appendChild(renderer.domElement);
+
+        // Shader material
+        const material = new THREE.ShaderMaterial({
+            vertexShader,
+            fragmentShader,
+            uniforms: {
+                resolution: { value: new THREE.Vector2() },
+                mouse: { value: new THREE.Vector2() },
+                time: { value: 0 },
+                hueVariation: { value: 0.5 },
+                animationSpeed: { value: 1 },
+                zoom: { value: 1 },
+                zoomCenter: { value: new THREE.Vector2() }
+            }
+        });
+
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+        scene.add(plane);
+
+        // Event handlers
+        const handleMouseMove = (e) => {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = (e.clientX - rect.left) / rect.width;
+            mouse.y = 1 - (e.clientY - rect.top) / rect.height;
+        };
+
+        const handleWheel = (e) => {
+            e.preventDefault();
+            const delta = e.deltaY * -0.001;
+            targetZoom = clamp(targetZoom * (1 + delta * ZOOM_SPEED), MIN_ZOOM, MAX_ZOOM);
+            zoomCenter.set(mouse.x, mouse.y);
+        };
+
+        container.addEventListener('mousemove', handleMouseMove);
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        
+        // UI controls
+        document.getElementById('hueRange').addEventListener('input', (e) => {
+            material.uniforms.hueVariation.value = parseFloat(e.target.value);
+        });
+
+        document.getElementById('speedRange').addEventListener('input', (e) => {
+            material.uniforms.animationSpeed.value = parseFloat(e.target.value);
+        });
+
+        document.getElementById('resetZoom').addEventListener('click', () => {
+            targetZoom = 1;
+            zoomCenter.set(0.5, 0.5);
+        });
+
+        // Animation loop
+        const animate = (time) => {
+            requestAnimationFrame(animate);
+            
+            currentZoom += (targetZoom - currentZoom) * 0.1;
+            material.uniforms.time.value = time * 0.001;
+            material.uniforms.mouse.value.copy(mouse);
+            material.uniforms.zoom.value = currentZoom;
+            material.uniforms.zoomCenter.value.copy(zoomCenter);
+            
+            const width = renderer.domElement.width;
+            const height = renderer.domElement.height;
+            material.uniforms.resolution.value.set(width, height);
+            
+            renderer.render(scene, camera);
+        };
+
+        // Resize handler
+        window.addEventListener('resize', () => {
+            setSize();
+            material.uniforms.resolution.value.set(
+                renderer.domElement.width,
+                renderer.domElement.height
+            );
+        });
+
+        animate(0);
+
+        // Utility functions
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+    </script>
+
+              
+          
+                
+          
+              
+</body></html>
